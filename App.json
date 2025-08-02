@@ -1,0 +1,56 @@
+require('dotenv').config();
+const { default: makeWASocket, useSingleFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require('@adiwajshing/baileys');
+const mongoose = require('mongoose');
+const qrcode = require('qrcode-terminal');
+
+// Database connection
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => console.log('Connected to MongoDB'))
+  .catch(err => console.error('MongoDB connection error:', err));
+
+// WhatsApp connection
+async function connectToWhatsApp() {
+  const { state, saveState } = useSingleFileAuthState('./session.json');
+  
+  const { version } = await fetchLatestBaileysVersion();
+  const sock = makeWASocket({
+    version,
+    auth: state,
+    printQRInTerminal: false,
+    browser: Browsers.ubuntu('Chrome'),
+  });
+
+  sock.ev.on('connection.update', (update) => {
+    const { connection, lastDisconnect, qr } = update;
+    
+    if (qr) {
+      // This should not happen since we're using phone number auth
+      console.log('QR code received, but we want code auth instead');
+    }
+    
+    if (connection === 'close') {
+      const shouldReconnect = (lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut);
+      console.log('connection closed due to ', lastDisconnect.error, ', reconnecting ', shouldReconnect);
+      if (shouldReconnect) {
+        connectToWhatsApp();
+      }
+    } else if (connection === 'open') {
+      console.log('opened connection');
+      console.log('Bot is connected with phone number:', process.env.WHATSAPP_NUMBER);
+    }
+  });
+
+  sock.ev.on('creds.update', saveState);
+  
+  // This is where you would normally request the code, but Baileys currently doesn't support direct phone number auth
+  // You would need to use a different library or approach for true phone number auth
+  
+  sock.ev.on('messages.upsert', ({ messages }) => {
+    console.log('received messages', messages);
+    // Handle incoming messages here
+  });
+}
+
+connectToWhatsApp().catch(err => console.error('Error connecting to WhatsApp:', err));
